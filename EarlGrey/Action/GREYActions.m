@@ -45,6 +45,7 @@
 #import "Matcher/GREYNot.h"
 #import "Synchronization/GREYUIThreadExecutor.h"
 #import "Synchronization/GREYUIWebViewIdlingResource.h"
+#import "WebKit/WebKit.h"
 
 static Class gWebAccessibilityObjectWrapperClass;
 static Class gAccessibilityTextFieldElementClass;
@@ -308,6 +309,35 @@ static Class gAccessibilityTextFieldElementClass;
     [[GREYUIThreadExecutor sharedInstance] drainForTime:0.5];  // Wait for actions to register.
     return YES;
   }];
+}
+
++ (id<GREYAction>)actionForWKWebViewJavaScriptExecution:(NSString *)js
+                                                 output:(out __strong NSString **)outResult {
+    // TODO: JS Errors should be propagated up.
+    id<GREYMatcher> constraints = grey_allOf(grey_not(grey_systemAlertViewShown()),
+                                             grey_kindOfClass([WKWebView class]),
+                                             nil);
+    return [[GREYActionBlock alloc] initWithName:@"Execute WKWebView JavaScript"
+                                     constraints:constraints
+                                    performBlock:^BOOL (WKWebView *webView,
+                                                        __strong NSError **errorOrNil) {
+                                        if (outResult) {
+                                            dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+                                            [webView evaluateJavaScript:js completionHandler:^(id _Nullable output, NSError * _Nullable error) {
+                                                if (output) {
+                                                    *outResult = output;
+                                                }
+                                                dispatch_semaphore_signal(semaphore);
+                                            }];
+                                            dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC);
+                                            dispatch_semaphore_wait(semaphore, timeout);
+                                        } else {
+                                            [webView evaluateJavaScript:js completionHandler:nil];
+                                        }
+                                        // TODO: Delay should be removed once webview sync is stable.
+                                        [[GREYUIThreadExecutor sharedInstance] drainForTime:0.5];  // Wait for actions to register.
+                                        return YES;
+                                    }];
 }
 
 + (id<GREYAction>)actionForSnapshot:(out __strong UIImage **)outImage {
@@ -782,7 +812,7 @@ id<GREYAction> grey_setPickerColumnToValue(NSInteger column, NSString *value) {
 }
 
 id<GREYAction> grey_javaScriptExecution(NSString *js, __strong NSString **outResult) {
-  return [GREYActions actionForJavaScriptExecution:js output:outResult];
+  return [GREYActions actionForWKWebViewJavaScriptExecution:js output:outResult];
 }
 
 id<GREYAction> grey_snapshot(__strong UIImage **outImage) {
